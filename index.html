@@ -26,14 +26,19 @@
             </div>
 
             <div class="flex flex-wrap items-center justify-end gap-3 w-full md:w-auto">
-                <button onclick="exportPendingRMReport()" class="inline-flex items-center gap-2 bg-rose-600 text-white text-sm font-semibold px-4 py-2 rounded-xl hover:bg-rose-700 transition shadow-sm">
-                    <i class="fas fa-download"></i>
-                    Pending RM Report
-                </button>
-                <button onclick="exportExcelReport()" class="inline-flex items-center gap-2 bg-emerald-600 text-white text-sm font-semibold px-4 py-2 rounded-xl hover:bg-emerald-700 transition shadow-sm">
-                    <i class="fas fa-file-excel"></i>
-                    Export Excel Report
-                </button>
+                <details id="reportsMenu" class="relative">
+                    <summary class="list-none inline-flex items-center gap-2 bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-xl hover:bg-blue-700 transition shadow-sm cursor-pointer select-none">
+                        <i class="fas fa-chart-column"></i>
+                        Reports
+                        <i class="fas fa-chevron-down text-xs"></i>
+                    </summary>
+                    <div class="absolute right-0 mt-2 w-64 bg-white border border-slate-200 rounded-xl shadow-lg p-2 z-50">
+                        <button onclick="exportPendingRMReport(); closeReportsMenu()" class="w-full text-left px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100 transition">Pending RM Report</button>
+                        <button onclick="exportSupplierDueReport(); closeReportsMenu()" class="w-full text-left px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100 transition">Supplier Due Report</button>
+                        <button onclick="exportExcelReport(); closeReportsMenu()" class="w-full text-left px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100 transition">Register Excel Report</button>
+                        <button onclick="exportAllReports(); closeReportsMenu()" class="w-full text-left px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100 transition">All Reports Generator</button>
+                    </div>
+                </details>
                 <div class="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
                     <i class="fas fa-calendar-alt text-slate-400 text-sm"></i>
                     <input type="date" id="dateFrom" class="bg-transparent text-sm border-none outline-none text-slate-600" title="From">
@@ -161,11 +166,44 @@
                                 <th class="px-4 py-3 font-semibold">Priority</th>
                                 <th class="px-4 py-3 font-semibold">Vendor Code</th>
                                 <th class="px-4 py-3 font-semibold">Supplier Name</th>
+                                <th class="px-4 py-3 font-semibold">Payment Terms</th>
+                                <th class="px-4 py-3 font-semibold">Received Date</th>
+                                <th class="px-4 py-3 font-semibold">Due Date</th>
                                 <th class="px-4 py-3 font-semibold text-right">Due Amount (SAR)</th>
                             </tr>
                         </thead>
                         <tbody id="supplierDueListBody" class="divide-y divide-slate-100"></tbody>
                     </table>
+                </div>
+            </div>
+        </section>
+
+        <section class="mb-6">
+            <div class="insight-panel bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                        <h3 class="font-semibold text-slate-800">Report Center</h3>
+                        <p class="text-xs text-slate-400">Generate all key reports from one place</p>
+                    </div>
+                    <span class="insight-chip">Generator</span>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                    <button onclick="exportPendingRMReport()" class="text-left rounded-xl border border-rose-200 bg-rose-50 p-4 hover:bg-rose-100 transition">
+                        <div class="text-sm font-bold text-rose-700">Pending RM Report</div>
+                        <div class="text-xs text-rose-600 mt-1">Pending qty summary and PO-level details</div>
+                    </button>
+                    <button onclick="exportSupplierDueReport()" class="text-left rounded-xl border border-amber-200 bg-amber-50 p-4 hover:bg-amber-100 transition">
+                        <div class="text-sm font-bold text-amber-700">Supplier Due Report</div>
+                        <div class="text-xs text-amber-600 mt-1">Due date and due amount from GRN receipts</div>
+                    </button>
+                    <button onclick="exportExcelReport()" class="text-left rounded-xl border border-emerald-200 bg-emerald-50 p-4 hover:bg-emerald-100 transition">
+                        <div class="text-sm font-bold text-emerald-700">Register Excel Report</div>
+                        <div class="text-xs text-emerald-600 mt-1">Material summary and full PO register</div>
+                    </button>
+                    <button onclick="exportAllReports()" class="text-left rounded-xl border border-blue-200 bg-blue-50 p-4 hover:bg-blue-100 transition">
+                        <div class="text-sm font-bold text-blue-700">All Reports Generator</div>
+                        <div class="text-xs text-blue-600 mt-1">Single file with Pending, Due, and Register sheets</div>
+                    </button>
                 </div>
             </div>
         </section>

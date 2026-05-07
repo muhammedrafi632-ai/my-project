@@ -223,6 +223,11 @@ function clearDateFilter() {
     applyFilters();
 }
 
+function closeReportsMenu() {
+    const menu = document.getElementById('reportsMenu');
+    if (menu) menu.removeAttribute('open');
+}
+
 function scrollPageTop() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -511,60 +516,110 @@ function renderInsights(data) {
     renderMaterialList('topReceivedMaterials', topReceived, 'received');
 }
 
-function calculateDueAmount(row) {
-    const qtyOrdered = parseNumber(getField(row, ['QTY ORDERED']) || 0);
-    const qtyReceived = parseNumber(getField(row, ['QTY RECEIVED', 'QTY RECD']) || 0);
-    const qtyBalanceField = getField(row, ['QTY BALANCE']);
-    const qtyBalance = qtyBalanceField !== null ? parseNumber(qtyBalanceField) : (qtyOrdered - qtyReceived);
-
-    const orderValue = parseSAR(getField(row, ['TOTAL ORDERED RM PRICE IN RIYAL', 'TOTAL ORDER VALUE']) || 0);
-    const receivedValue = parseSAR(getField(row, ['TOTAL RECEIVED RM PRICE IN RIYAL', 'TOTAL RECEIVED VALUE']) || 0);
-
-    if (orderValue > 0 || receivedValue > 0) {
-        const balanceValue = orderValue - receivedValue;
-        if (balanceValue > 0) return balanceValue;
-    }
-
-    if (qtyBalance > 0 && qtyOrdered > 0 && orderValue > 0) {
-        const unitValue = orderValue / qtyOrdered;
-        return qtyBalance * unitValue;
-    }
-
-    return 0;
+function parsePaymentTermDays(value) {
+    const match = String(value || '').match(/(\d+)/);
+    return match ? parseInt(match[1], 10) : 0;
 }
 
-function getSupplierDuePriority(rank, totalRows) {
-    if (totalRows <= 3) {
-        if (rank === 0) return 'High';
-        if (rank === 1) return 'Medium';
-        return 'Low';
-    }
+function addDays(date, days) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+    const result = new Date(date);
+    result.setDate(result.getDate() + days);
+    return result;
+}
 
-    const percentile = (rank + 1) / totalRows;
-    if (percentile <= 0.2) return 'High';
-    if (percentile <= 0.6) return 'Medium';
+function formatDisplayDate(date) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '-';
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}/${month}/${year}`;
+}
+
+function getSupplierDuePriority(dueDate) {
+    if (!(dueDate instanceof Date) || Number.isNaN(dueDate.getTime())) return 'Low';
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const diffDays = Math.floor((dueDate.getTime() - today.getTime()) / 86400000);
+    if (diffDays <= 0) return 'High';
+    if (diffDays <= 14) return 'Medium';
     return 'Low';
+}
+
+function getDueEntriesForRow(row) {
+    const vendorCode = String(getField(row, ['VENDOR CODE', 'V CODE']) || '').trim() || 'Others';
+    const supplierName = String(getField(row, ['SUPPLIER NAME']) || '').trim() || 'Others';
+    const paymentTerms = String(getField(row, ['PAYMENT', 'PAYMENT TERMS']) || '').trim() || '0 DAYS';
+    const paymentDays = parsePaymentTermDays(paymentTerms);
+    const qtyOrdered = parseNumber(getField(row, ['QTY ORDERED']) || 0);
+    const orderValue = parseSAR(getField(row, ['TOTAL ORDERED RM PRICE IN RIYAL', 'TOTAL ORDER VALUE']) || 0);
+    const po = getField(row, ['PO', 'PO NO.', 'PO NO']) || '';
+    const materialName = getField(row, ['RM NAME', 'Rm Name', 'Rm Name.']) || '';
+
+    if (qtyOrdered <= 0 || orderValue <= 0) return [];
+
+    const unitValue = orderValue / qtyOrdered;
+    const grns = getMatchingGrns(po, materialName);
+    const cards = dedupeGrnCards(grns.flatMap(extractGrnCards));
+
+    return cards.map(card => {
+        const receivedQty = parseNumber(card.qty || 0);
+        const receivedDate = parseDate(card.dt || '');
+        const dueDate = addDays(receivedDate, paymentDays);
+        const dueAmount = receivedQty * unitValue;
+
+        if (receivedQty <= 0 || !receivedDate || !dueDate || dueAmount <= 0) return null;
+
+        return {
+            vendorCode,
+            supplierName,
+            paymentTerms,
+            receivedDate,
+            dueDate,
+            dueAmount,
+            priority: getSupplierDuePriority(dueDate)
+        };
+    }).filter(Boolean);
 }
 
 function summarizeSupplierDues(data) {
     const summary = new Map();
 
     data.forEach(row => {
-        const vendorCode = String(getField(row, ['VENDOR CODE', 'V CODE']) || '').trim() || 'Others';
-        const supplierName = String(getField(row, ['SUPPLIER NAME']) || '').trim() || 'Others';
-        const dueAmount = calculateDueAmount(row);
+        getDueEntriesForRow(row).forEach(entry => {
+            const dueKey = formatDisplayDate(entry.dueDate);
+            const key = `${entry.vendorCode}__${entry.supplierName}__${entry.paymentTerms}__${dueKey}`;
 
-        if (dueAmount <= 0) return;
+            if (!summary.has(key)) {
+                summary.set(key, {
+                    vendorCode: entry.vendorCode,
+                    supplierName: entry.supplierName,
+                    paymentTerms: entry.paymentTerms,
+                    receivedDate: entry.receivedDate,
+                    dueDate: entry.dueDate,
+                    dueAmount: 0,
+                    priority: entry.priority
+                });
+            }
 
-        const key = `${vendorCode}__${supplierName}`;
-        if (!summary.has(key)) {
-            summary.set(key, { vendorCode, supplierName, dueAmount: 0 });
-        }
-
-        summary.get(key).dueAmount += dueAmount;
+            const item = summary.get(key);
+            item.dueAmount += entry.dueAmount;
+            if (entry.receivedDate < item.receivedDate) item.receivedDate = entry.receivedDate;
+            if (entry.dueDate < item.dueDate) item.dueDate = entry.dueDate;
+            item.priority = getSupplierDuePriority(item.dueDate);
+        });
     });
 
-    return Array.from(summary.values()).sort((a, b) => b.dueAmount - a.dueAmount);
+    return Array.from(summary.values()).sort((a, b) => {
+        const priorityOrder = { High: 0, Medium: 1, Low: 2 };
+        const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
+        if (priorityDiff !== 0) return priorityDiff;
+        const dateDiff = a.dueDate - b.dueDate;
+        if (dateDiff !== 0) return dateDiff;
+        return b.dueAmount - a.dueAmount;
+    });
 }
 
 function renderSupplierDueList(data) {
@@ -573,20 +628,86 @@ function renderSupplierDueList(data) {
 
     const rows = summarizeSupplierDues(data);
     if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="4" class="px-4 py-5 text-sm text-slate-400 text-center">No supplier due amounts found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-5 text-sm text-slate-400 text-center">No supplier due amounts found.</td></tr>';
         return;
     }
 
-    tbody.innerHTML = rows.map((item, index) => {
-        const priority = getSupplierDuePriority(index, rows.length);
+    tbody.innerHTML = rows.map((item) => {
         return `
             <tr>
-                <td class="px-4 py-3.5 text-sm"><span class="priority-chip priority-${priority.toLowerCase()}">${priority}</span></td>
+                <td class="px-4 py-3.5 text-sm"><span class="priority-chip priority-${item.priority.toLowerCase()}">${item.priority}</span></td>
                 <td class="px-4 py-3.5 text-sm"><span class="vendor-chip">${item.vendorCode}</span></td>
                 <td class="px-4 py-3.5 text-sm text-slate-700">${item.supplierName}</td>
+                <td class="px-4 py-3.5 text-sm text-slate-600">${item.paymentTerms}</td>
+                <td class="px-4 py-3.5 text-sm text-slate-600">${formatDisplayDate(item.receivedDate)}</td>
+                <td class="px-4 py-3.5 text-sm font-semibold text-slate-700">${formatDisplayDate(item.dueDate)}</td>
                 <td class="px-4 py-3.5 text-sm text-right font-bold text-rose-600">${formatMoney(item.dueAmount)}</td>
             </tr>`;
     }).join('');
+}
+
+function getSupplierDueExportRows(data) {
+    return summarizeSupplierDues(data).map(item => ({
+        'Priority': item.priority,
+        'Vendor Code': item.vendorCode,
+        'Supplier Name': item.supplierName,
+        'Payment Terms': item.paymentTerms,
+        'Received Date': formatDisplayDate(item.receivedDate),
+        'Due Date': formatDisplayDate(item.dueDate),
+        'Due Amount SAR': Math.round(item.dueAmount)
+    }));
+}
+
+function buildPendingReportData(data) {
+    const pendingRows = data
+        .map(row => {
+            const qtyOrdered = parseNumber(getField(row, ['QTY ORDERED']) || 0);
+            const qtyReceived = parseNumber(getField(row, ['QTY RECEIVED', 'QTY RECD']) || 0);
+            const qtyBalanceRaw = getField(row, ['QTY BALANCE']);
+            const qtyBalance = parseNumber(qtyBalanceRaw || (qtyOrdered - qtyReceived));
+
+            return {
+                'PO Date': getField(row, ['PO DATE', 'PO DATE.']) || '',
+                'PO No': getField(row, ['PO', 'PO NO.', 'PO NO']) || '',
+                'Vendor Code': getField(row, ['VENDOR CODE', 'V CODE']) || '',
+                'Supplier Name': getField(row, ['SUPPLIER NAME']) || '',
+                'RM Code': getField(row, ['RM CODE']) || '',
+                'Category': categorizeRMCode(getField(row, ['RM CODE']) || ''),
+                'Raw Material': getField(row, ['RM NAME']) || '',
+                'Qty Ordered': qtyOrdered,
+                'Qty Received': qtyReceived,
+                'Pending Qty': qtyBalance,
+                'Order Value SAR': parseSAR(getField(row, ['TOTAL ORDERED RM PRICE IN RIYAL', 'TOTAL ORDER VALUE']) || 0),
+                'Received Value SAR': parseSAR(getField(row, ['TOTAL RECEIVED RM PRICE IN RIYAL', 'TOTAL RECEIVED VALUE']) || 0),
+                'Status': qtyBalance > 0 ? 'Pending' : 'Completed'
+            };
+        })
+        .filter(row => row['Pending Qty'] > 0)
+        .sort((a, b) => b['Pending Qty'] - a['Pending Qty']);
+
+    const pendingSummary = pendingRows.reduce((acc, row) => {
+        const key = `${row['RM Code']}__${row['Raw Material']}`;
+        if (!acc[key]) {
+            acc[key] = {
+                'RM Code': row['RM Code'],
+                'Category': row['Category'],
+                'Raw Material': row['Raw Material'],
+                'Total Pending Qty': 0,
+                'Total Ordered Qty': 0,
+                'Total Received Qty': 0,
+                'Open POs': 0
+            };
+        }
+
+        acc[key]['Total Pending Qty'] += row['Pending Qty'];
+        acc[key]['Total Ordered Qty'] += row['Qty Ordered'];
+        acc[key]['Total Received Qty'] += row['Qty Received'];
+        acc[key]['Open POs'] += 1;
+        return acc;
+    }, {});
+
+    const summaryRows = Object.values(pendingSummary).sort((a, b) => b['Total Pending Qty'] - a['Total Pending Qty']);
+    return { summaryRows, pendingRows };
 }
 
 function exportExcelReport() {
@@ -631,59 +752,12 @@ function exportExcelReport() {
 }
 
 function exportPendingRMReport() {
-    const pendingRows = filtered
-        .map(row => {
-            const qtyOrdered = parseNumber(getField(row, ['QTY ORDERED']) || 0);
-            const qtyReceived = parseNumber(getField(row, ['QTY RECEIVED', 'QTY RECD']) || 0);
-            const qtyBalanceRaw = getField(row, ['QTY BALANCE']);
-            const qtyBalance = parseNumber(qtyBalanceRaw || (qtyOrdered - qtyReceived));
-
-            return {
-                'PO Date': getField(row, ['PO DATE', 'PO DATE.']) || '',
-                'PO No': getField(row, ['PO', 'PO NO.', 'PO NO']) || '',
-                'Vendor Code': getField(row, ['VENDOR CODE', 'V CODE']) || '',
-                'Supplier Name': getField(row, ['SUPPLIER NAME']) || '',
-                'RM Code': getField(row, ['RM CODE']) || '',
-                'Category': categorizeRMCode(getField(row, ['RM CODE']) || ''),
-                'Raw Material': getField(row, ['RM NAME']) || '',
-                'Qty Ordered': qtyOrdered,
-                'Qty Received': qtyReceived,
-                'Pending Qty': qtyBalance,
-                'Order Value SAR': parseSAR(getField(row, ['TOTAL ORDERED RM PRICE IN RIYAL', 'TOTAL ORDER VALUE']) || 0),
-                'Received Value SAR': parseSAR(getField(row, ['TOTAL RECEIVED RM PRICE IN RIYAL', 'TOTAL RECEIVED VALUE']) || 0),
-                'Status': qtyBalance > 0 ? 'Pending' : 'Completed'
-            };
-        })
-        .filter(row => row['Pending Qty'] > 0)
-        .sort((a, b) => b['Pending Qty'] - a['Pending Qty']);
+    const { summaryRows, pendingRows } = buildPendingReportData(filtered);
 
     if (!pendingRows.length) {
         alert('No pending raw materials found for export.');
         return;
     }
-
-    const pendingSummary = pendingRows.reduce((acc, row) => {
-        const key = `${row['RM Code']}__${row['Raw Material']}`;
-        if (!acc[key]) {
-            acc[key] = {
-                'RM Code': row['RM Code'],
-                'Category': row['Category'],
-                'Raw Material': row['Raw Material'],
-                'Total Pending Qty': 0,
-                'Total Ordered Qty': 0,
-                'Total Received Qty': 0,
-                'Open POs': 0
-            };
-        }
-
-        acc[key]['Total Pending Qty'] += row['Pending Qty'];
-        acc[key]['Total Ordered Qty'] += row['Qty Ordered'];
-        acc[key]['Total Received Qty'] += row['Qty Received'];
-        acc[key]['Open POs'] += 1;
-        return acc;
-    }, {});
-
-    const summaryRows = Object.values(pendingSummary).sort((a, b) => b['Total Pending Qty'] - a['Total Pending Qty']);
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'Pending Summary');
@@ -691,6 +765,67 @@ function exportPendingRMReport() {
 
     const dateStamp = new Date().toISOString().slice(0, 10);
     XLSX.writeFile(wb, `Pending_RM_Report_${dateStamp}.xlsx`);
+}
+
+function exportSupplierDueReport() {
+    const dueRows = getSupplierDueExportRows(filtered);
+    if (!dueRows.length) {
+        alert('No supplier due rows found to export.');
+        return;
+    }
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dueRows), 'Supplier Due');
+
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `Supplier_Due_Report_${dateStamp}.xlsx`);
+}
+
+function exportAllReports() {
+    if (!filtered.length) {
+        alert('No data available to export yet.');
+        return;
+    }
+
+    const detailedRows = filtered.map(row => ({
+        'PO Date': getField(row, ['PO DATE', 'PO DATE.']) || '',
+        'PO No': getField(row, ['PO', 'PO NO.', 'PO NO']) || '',
+        'Vendor Code': getField(row, ['VENDOR CODE', 'V CODE']) || '',
+        'Supplier Name': getField(row, ['SUPPLIER NAME']) || '',
+        'RM Code': getField(row, ['RM CODE']) || '',
+        'Category': categorizeRMCode(getField(row, ['RM CODE']) || ''),
+        'Raw Material': getField(row, ['RM NAME']) || '',
+        'Qty Ordered': parseNumber(getField(row, ['QTY ORDERED']) || 0),
+        'Qty Received': parseNumber(getField(row, ['QTY RECEIVED', 'QTY RECD']) || 0),
+        'Qty Balance': parseNumber(getField(row, ['QTY BALANCE']) || 0),
+        'Order Value SAR': parseSAR(getField(row, ['TOTAL ORDERED RM PRICE IN RIYAL', 'TOTAL ORDER VALUE']) || 0),
+        'Received Value SAR': parseSAR(getField(row, ['TOTAL RECEIVED RM PRICE IN RIYAL', 'TOTAL RECEIVED VALUE']) || 0)
+    }));
+
+    const materialSummary = summarizeMaterials(filtered)
+        .sort((a, b) => b.ordered - a.ordered)
+        .map(item => ({
+            'RM Code': item.rmCode,
+            'Category': item.category,
+            'Raw Material': item.name,
+            'Total Ordered Qty': item.ordered,
+            'Total Received Qty': item.received,
+            'Balance Qty': item.ordered - item.received,
+            'Order Value SAR': item.value
+        }));
+
+    const { summaryRows, pendingRows } = buildPendingReportData(filtered);
+    const dueRows = getSupplierDueExportRows(filtered);
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(materialSummary), 'Material Summary');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detailedRows), 'PO Register');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'Pending Summary');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pendingRows), 'Pending PO Details');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dueRows), 'Supplier Due');
+
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `All_RM_Reports_${dateStamp}.xlsx`);
 }
 
 function showError(msg) {
