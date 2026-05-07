@@ -71,7 +71,7 @@ function updateStats(data) {
     const orderVal = data.reduce((s, r) => s + parseSAR(getField(r, ['TOTAL ORDERED RM PRICE IN RIYAL', 'TOTAL ORDER VALUE']) || 0), 0);
     const receivedVal = data.reduce((s, r) => s + parseSAR(getField(r, ['TOTAL RECEIVED RM PRICE IN RIYAL', 'TOTAL RECEIVED VALUE']) || 0), 0);
     const balanceVal = orderVal - receivedVal;
-    const vendors = new Set(data.map(r => getField(r, ['VENDOR CODE'])).filter(Boolean)).size;
+    const vendors = new Set(data.map(r => getField(r, ['VENDOR CODE', 'V CODE'])).filter(Boolean)).size;
 
     document.getElementById('stat-total-pos').textContent = data.length.toLocaleString();
     document.getElementById('stat-order-qty').textContent = formatQty(orderQty);
@@ -89,9 +89,9 @@ function renderTable(data) {
     tbody.innerHTML = '';
 
     data.forEach((row) => {
-        const date = getField(row, ['PO DATE']) || '-';
+        const date = getField(row, ['PO DATE', 'PO DATE.']) || '-';
         const po = getField(row, ['PO', 'PO NO.', 'PO NO']) || '-';
-        const vendor = getField(row, ['VENDOR CODE']) || '-';
+        const vendor = getField(row, ['VENDOR CODE', 'V CODE']) || '-';
         const supplier = getField(row, ['SUPPLIER NAME']) || '-';
         const rmCode = getField(row, ['RM CODE']) || '-';
         const category = categorizeRMCode(rmCode);
@@ -203,7 +203,7 @@ function applyFilters() {
 
     filtered = rawData.filter(row => {
         const matchSearch = !q || Object.values(row).some(v => String(v).toLowerCase().includes(q));
-        const rowDate = parseDate(getField(row, ['PO DATE']));
+        const rowDate = parseDate(getField(row, ['PO DATE', 'PO DATE.']));
         const matchFrom = !fromDate || !rowDate || rowDate >= fromDate;
         const matchTo   = !toDate || !rowDate || rowDate <= toDate;
         return matchSearch && matchFrom && matchTo;
@@ -349,7 +349,11 @@ function parseInputDate(value, endOfDay) {
 }
 
 function normalizeKey(key) {
-    return String(key || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    return String(key || '')
+        .replace(/[^a-z0-9]+/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
 }
 
 function categorizeRMCode(code) {
@@ -428,7 +432,7 @@ function extractGrnCards(row) {
     if (!cards.length) {
         const qtyRecd = parseNumber(getField(row, ['Qty Recd', 'QTY RECD']) || 0);
         if (qtyRecd > 0) {
-            cards.push({ no: 'Summary', dt: getField(row, ['PO Date', 'PO DATE']) || '', qty: qtyRecd });
+            cards.push({ no: 'Summary', dt: getField(row, ['PO Date', 'PO DATE', 'PO DATE.']) || '', qty: qtyRecd });
         }
     }
 
@@ -546,7 +550,7 @@ function summarizeSupplierDues(data) {
     const summary = new Map();
 
     data.forEach(row => {
-        const vendorCode = String(getField(row, ['VENDOR CODE']) || '').trim() || 'Others';
+        const vendorCode = String(getField(row, ['VENDOR CODE', 'V CODE']) || '').trim() || 'Others';
         const supplierName = String(getField(row, ['SUPPLIER NAME']) || '').trim() || 'Others';
         const dueAmount = calculateDueAmount(row);
 
@@ -592,9 +596,9 @@ function exportExcelReport() {
     }
 
     const detailedRows = filtered.map(row => ({
-        'PO Date': getField(row, ['PO DATE']) || '',
+        'PO Date': getField(row, ['PO DATE', 'PO DATE.']) || '',
         'PO No': getField(row, ['PO', 'PO NO.', 'PO NO']) || '',
-        'Vendor Code': getField(row, ['VENDOR CODE']) || '',
+        'Vendor Code': getField(row, ['VENDOR CODE', 'V CODE']) || '',
         'Supplier Name': getField(row, ['SUPPLIER NAME']) || '',
         'RM Code': getField(row, ['RM CODE']) || '',
         'Category': categorizeRMCode(getField(row, ['RM CODE']) || ''),
@@ -635,9 +639,9 @@ function exportPendingRMReport() {
             const qtyBalance = parseNumber(qtyBalanceRaw || (qtyOrdered - qtyReceived));
 
             return {
-                'PO Date': getField(row, ['PO DATE']) || '',
+                'PO Date': getField(row, ['PO DATE', 'PO DATE.']) || '',
                 'PO No': getField(row, ['PO', 'PO NO.', 'PO NO']) || '',
-                'Vendor Code': getField(row, ['VENDOR CODE']) || '',
+                'Vendor Code': getField(row, ['VENDOR CODE', 'V CODE']) || '',
                 'Supplier Name': getField(row, ['SUPPLIER NAME']) || '',
                 'RM Code': getField(row, ['RM CODE']) || '',
                 'Category': categorizeRMCode(getField(row, ['RM CODE']) || ''),
