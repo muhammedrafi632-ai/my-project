@@ -4,10 +4,29 @@ const GRN_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSKJrZEW_VH
 let rawData  = [];
 let grnData  = [];
 let filtered = [];
+let manualSupplierDueEntries = [];
+let duePaymentStatusMap = {};
+let supplierDueFilter = 'all';
+let dashboardMetricMode = 'value';
+let dashboardPresentationMode = false;
+
+const MANUAL_DUE_STORAGE_KEY = 'rm_manual_supplier_due_entries_v1';
+const DUE_PAYMENT_STATUS_STORAGE_KEY = 'rm_due_payment_status_v1';
 
 document.addEventListener('DOMContentLoaded', () => {
+    loadDueTrackingState();
     fetchData();
     document.getElementById('searchInput').addEventListener('input', (e) => applyFilters());
+    const manualDueForm = document.getElementById('manualDueForm');
+    if (manualDueForm) {
+        manualDueForm.addEventListener('submit', handleManualDueSubmit);
+    }
+    initializeDueFilters();
+    document.addEventListener('fullscreenchange', () => {
+        if (!document.fullscreenElement && dashboardPresentationMode) {
+            setDashboardPresentationMode(false, false);
+        }
+    });
     window.addEventListener('scroll', toggleScrollButtonState);
     toggleScrollButtonState();
 });
@@ -213,6 +232,7 @@ function applyFilters() {
     updateStats(filtered);
     renderInsights(filtered);
     renderSupplierDueList(filtered);
+    renderManagementDashboard(filtered);
 }
 
 function applyDateFilter() { applyFilters(); }
@@ -226,6 +246,130 @@ function clearDateFilter() {
 function closeReportsMenu() {
     const menu = document.getElementById('reportsMenu');
     if (menu) menu.removeAttribute('open');
+}
+
+function setDashboardMetricMode(mode) {
+    dashboardMetricMode = mode === 'qty' ? 'qty' : 'value';
+    const byValue = document.getElementById('dashboardModeValue');
+    const byQty = document.getElementById('dashboardModeQty');
+    if (byValue) byValue.classList.toggle('active', dashboardMetricMode === 'value');
+    if (byQty) byQty.classList.toggle('active', dashboardMetricMode === 'qty');
+    renderManagementDashboard(filtered);
+}
+
+function updateDashboardPresentationButton() {
+    const btn = document.getElementById('dashboardPresentationBtn');
+    if (!btn) return;
+
+    if (dashboardPresentationMode) {
+        btn.innerHTML = '<i class="fas fa-compress"></i> Exit Presentation';
+    } else {
+        btn.innerHTML = '<i class="fas fa-expand"></i> Presentation Mode';
+    }
+}
+
+function setDashboardPresentationMode(enabled, scrollIntoView) {
+    dashboardPresentationMode = enabled;
+    document.body.classList.toggle('dashboard-presentation-mode', enabled);
+
+    const dashboardSection = document.getElementById('managementDashboardSection');
+    const children = document.querySelectorAll('main > *');
+    children.forEach(el => {
+        if (el !== dashboardSection) {
+            el.classList.toggle('dashboard-hidden-for-present', enabled);
+        }
+    });
+
+    if (dashboardSection) {
+        dashboardSection.classList.remove('hidden');
+        if (enabled && scrollIntoView) {
+            dashboardSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }
+
+    updateDashboardPresentationButton();
+}
+
+async function toggleDashboardPresentationMode() {
+    const dashboardSection = document.getElementById('managementDashboardSection');
+    if (dashboardSection) {
+        dashboardSection.classList.remove('hidden');
+    }
+    renderManagementDashboard(filtered);
+
+    if (!dashboardPresentationMode) {
+        setDashboardPresentationMode(true, true);
+        if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+            try {
+                await document.documentElement.requestFullscreen();
+            } catch (err) {
+                // Keep presentation layout even if browser blocks fullscreen.
+            }
+        }
+        return;
+    }
+
+    if (document.fullscreenElement && document.exitFullscreen) {
+        try {
+            await document.exitFullscreen();
+        } catch (err) {
+            setDashboardPresentationMode(false, false);
+        }
+    } else {
+        setDashboardPresentationMode(false, false);
+    }
+}
+
+function generateManagementDashboard() {
+    const section = document.getElementById('managementDashboardSection');
+    if (!section) return;
+    section.classList.remove('hidden');
+    renderManagementDashboard(filtered);
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function initializeDueFilters() {
+    const buttons = document.querySelectorAll('.due-filter-btn[data-due-filter]');
+    buttons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            supplierDueFilter = btn.dataset.dueFilter || 'all';
+            updateDueFilterButtons();
+            renderSupplierDueList(filtered);
+        });
+    });
+    updateDueFilterButtons();
+}
+
+function updateDueFilterButtons() {
+    const buttons = document.querySelectorAll('.due-filter-btn[data-due-filter]');
+    buttons.forEach(btn => {
+        const isActive = (btn.dataset.dueFilter || 'all') === supplierDueFilter;
+        btn.classList.toggle('active', isActive);
+    });
+}
+
+function loadDueTrackingState() {
+    try {
+        const manualRaw = localStorage.getItem(MANUAL_DUE_STORAGE_KEY);
+        manualSupplierDueEntries = manualRaw ? JSON.parse(manualRaw) : [];
+    } catch (err) {
+        manualSupplierDueEntries = [];
+    }
+
+    try {
+        const statusRaw = localStorage.getItem(DUE_PAYMENT_STATUS_STORAGE_KEY);
+        duePaymentStatusMap = statusRaw ? JSON.parse(statusRaw) : {};
+    } catch (err) {
+        duePaymentStatusMap = {};
+    }
+}
+
+function saveManualDueEntries() {
+    localStorage.setItem(MANUAL_DUE_STORAGE_KEY, JSON.stringify(manualSupplierDueEntries));
+}
+
+function saveDuePaymentStatus() {
+    localStorage.setItem(DUE_PAYMENT_STATUS_STORAGE_KEY, JSON.stringify(duePaymentStatusMap));
 }
 
 function scrollPageTop() {
@@ -298,6 +442,15 @@ function formatMoney(n) {
 
 function formatQty(n) {
     return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+
+function escapeHtml(value) {
+    return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 function parseDate(str) {
@@ -479,6 +632,146 @@ function summarizeMaterials(data) {
     return Array.from(summary.values());
 }
 
+function summarizeVendors(data) {
+    const summary = new Map();
+
+    data.forEach(row => {
+        const vendorCode = String(getField(row, ['VENDOR CODE', 'V CODE']) || '').trim() || 'Others';
+        const supplierName = String(getField(row, ['SUPPLIER NAME']) || '').trim() || 'Others';
+        const key = `${vendorCode}__${supplierName}`;
+        if (!summary.has(key)) {
+            summary.set(key, { vendorCode, supplierName, orderValue: 0, orderedQty: 0, poCount: 0 });
+        }
+
+        const item = summary.get(key);
+        item.orderValue += parseSAR(getField(row, ['TOTAL ORDERED RM PRICE IN RIYAL', 'TOTAL ORDER VALUE']) || 0);
+        item.orderedQty += parseNumber(getField(row, ['QTY ORDERED']) || 0);
+        item.poCount += 1;
+    });
+
+    return Array.from(summary.values());
+}
+
+function summarizeCategoryMix(data) {
+    const summary = new Map();
+
+    data.forEach(row => {
+        const category = categorizeRMCode(getField(row, ['RM CODE']) || '');
+        const orderedQty = parseNumber(getField(row, ['QTY ORDERED']) || 0);
+        const orderValue = parseSAR(getField(row, ['TOTAL ORDERED RM PRICE IN RIYAL', 'TOTAL ORDER VALUE']) || 0);
+        if (!summary.has(category)) {
+            summary.set(category, { category, orderedQty: 0, orderValue: 0 });
+        }
+
+        const item = summary.get(category);
+        item.orderedQty += orderedQty;
+        item.orderValue += orderValue;
+    });
+
+    return Array.from(summary.values());
+}
+
+function renderDashboardRankList(containerId, rows, getLabel, getValue, formatValue) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    if (!rows.length) {
+        container.innerHTML = '<div class="text-sm text-slate-400">No data available.</div>';
+        return;
+    }
+
+    const topRows = rows.slice(0, 6);
+    const maxValue = Math.max(...topRows.map(getValue), 1);
+
+    container.innerHTML = topRows.map((row, idx) => {
+        const value = getValue(row);
+        const pct = Math.max(4, Math.round((value / maxValue) * 100));
+        return `
+            <div class="dashboard-row">
+                <div class="dashboard-row-head">
+                    <span class="dashboard-rank">${idx + 1}</span>
+                    <span class="dashboard-label">${escapeHtml(getLabel(row))}</span>
+                    <span class="dashboard-value">${formatValue(value)}</span>
+                </div>
+                <div class="dashboard-bar"><span style="width:${pct}%"></span></div>
+            </div>`;
+    }).join('');
+}
+
+function renderManagementDashboard(data) {
+    const section = document.getElementById('managementDashboardSection');
+    if (!section || section.classList.contains('hidden')) return;
+
+    const orderValue = data.reduce((s, r) => s + parseSAR(getField(r, ['TOTAL ORDERED RM PRICE IN RIYAL', 'TOTAL ORDER VALUE']) || 0), 0);
+    const receivedValue = data.reduce((s, r) => s + parseSAR(getField(r, ['TOTAL RECEIVED RM PRICE IN RIYAL', 'TOTAL RECEIVED VALUE']) || 0), 0);
+    const pendingValue = Math.max(orderValue - receivedValue, 0);
+    const dueRows = summarizeSupplierDues(data);
+    const unpaidDueRows = dueRows.filter(r => !getPaymentState(r.id).paid);
+    const unpaidDueValue = unpaidDueRows.reduce((sum, row) => sum + row.dueAmount, 0);
+    const overdueCount = unpaidDueRows.filter(r => getSupplierDuePriority(r.dueDate) === 'High').length;
+
+    const cards = [
+        { title: 'Records', value: data.length.toLocaleString(), tone: 'blue' },
+        { title: 'Order Value', value: 'SAR ' + formatMoney(orderValue), tone: 'indigo' },
+        { title: 'Received Value', value: 'SAR ' + formatMoney(receivedValue), tone: 'emerald' },
+        { title: 'Pending Value', value: 'SAR ' + formatMoney(pendingValue), tone: 'amber' },
+        { title: 'Unpaid Due', value: 'SAR ' + formatMoney(unpaidDueValue), note: overdueCount + ' overdue', tone: 'rose' }
+    ];
+
+    const kpiEl = document.getElementById('dashboardKpiCards');
+    if (kpiEl) {
+        kpiEl.innerHTML = cards.map(card => `
+            <div class="dashboard-kpi tone-${card.tone}">
+                <div class="kpi-title">${card.title}</div>
+                <div class="kpi-value">${card.value}</div>
+                <div class="kpi-note">${card.note || ''}</div>
+            </div>
+        `).join('');
+    }
+
+    const vendors = summarizeVendors(data).sort((a, b) => {
+        return dashboardMetricMode === 'qty' ? (b.orderedQty - a.orderedQty) : (b.orderValue - a.orderValue);
+    });
+
+    renderDashboardRankList(
+        'dashboardTopVendors',
+        vendors,
+        row => `${row.vendorCode} • ${row.supplierName}`,
+        row => dashboardMetricMode === 'qty' ? row.orderedQty : row.orderValue,
+        value => dashboardMetricMode === 'qty' ? formatQty(value) : ('SAR ' + formatMoney(value))
+    );
+
+    const categories = summarizeCategoryMix(data).sort((a, b) => {
+        return dashboardMetricMode === 'qty' ? (b.orderedQty - a.orderedQty) : (b.orderValue - a.orderValue);
+    });
+
+    renderDashboardRankList(
+        'dashboardCategoryMix',
+        categories,
+        row => row.category,
+        row => dashboardMetricMode === 'qty' ? row.orderedQty : row.orderValue,
+        value => dashboardMetricMode === 'qty' ? formatQty(value) : ('SAR ' + formatMoney(value))
+    );
+
+    const { summaryRows, pendingRows } = buildPendingReportData(data);
+    const pendingEl = document.getElementById('dashboardPendingSummary');
+    if (pendingEl) {
+        const totalPendingQty = pendingRows.reduce((sum, r) => sum + (r['Pending Qty'] || 0), 0);
+        pendingEl.innerHTML = `
+            <div class="dashboard-mini-card"><span>Open POs</span><strong>${pendingRows.length.toLocaleString()}</strong></div>
+            <div class="dashboard-mini-card"><span>Pending Qty</span><strong>${formatQty(totalPendingQty)}</strong></div>
+            <div class="dashboard-mini-card"><span>RM Lines</span><strong>${summaryRows.length.toLocaleString()}</strong></div>`;
+    }
+
+    const dueEl = document.getElementById('dashboardDueSummary');
+    if (dueEl) {
+        const paidRows = dueRows.length - unpaidDueRows.length;
+        dueEl.innerHTML = `
+            <div class="dashboard-mini-card"><span>Due Lines</span><strong>${dueRows.length.toLocaleString()}</strong></div>
+            <div class="dashboard-mini-card"><span>Unpaid Lines</span><strong>${unpaidDueRows.length.toLocaleString()}</strong></div>
+            <div class="dashboard-mini-card"><span>Paid Lines</span><strong>${paidRows.toLocaleString()}</strong></div>`;
+    }
+}
+
 function renderMaterialList(containerId, items, type) {
     const el = document.getElementById(containerId);
     if (!el) return;
@@ -548,6 +841,105 @@ function getSupplierDuePriority(dueDate) {
     return 'Low';
 }
 
+function getDueEntryId(entry, source) {
+    if (source === 'Manual') return entry.id;
+    const dateKey = formatDisplayDate(entry.dueDate);
+    return `AUTO|${entry.vendorCode}|${entry.supplierName}|${entry.paymentTerms}|${dateKey}`;
+}
+
+function getPaymentState(entryId) {
+    const state = duePaymentStatusMap[entryId];
+    if (!state) return { paid: false, paidOn: '' };
+    return { paid: Boolean(state.paid), paidOn: state.paidOn || '' };
+}
+
+function getManualSupplierDueRows() {
+    return manualSupplierDueEntries
+        .map(item => {
+            const receivedDate = parseDate(item.receivedDate || '');
+            const dueDate = parseDate(item.dueDate || '');
+            const dueAmount = parseNumber(item.dueAmount || 0);
+            if (!dueDate || dueAmount <= 0) return null;
+
+            return {
+                id: item.id,
+                vendorCode: item.vendorCode || 'Others',
+                supplierName: item.supplierName || 'Others',
+                paymentTerms: item.paymentTerms || '0 DAYS',
+                receivedDate: receivedDate || dueDate,
+                dueDate,
+                dueAmount,
+                priority: getSupplierDuePriority(dueDate),
+                source: 'Manual'
+            };
+        })
+        .filter(Boolean);
+}
+
+function handleManualDueSubmit(event) {
+    event.preventDefault();
+
+    const supplierName = String(document.getElementById('manualSupplierName').value || '').trim();
+    const dueAmount = parseNumber(document.getElementById('manualDueAmount').value || 0);
+    const vendorCode = String(document.getElementById('manualVendorCode').value || '').trim() || 'Others';
+    const paymentTerms = String(document.getElementById('manualPaymentTerms').value || '').trim() || '0 DAYS';
+    const receivedDateRaw = document.getElementById('manualReceivedDate').value;
+    const dueDateRaw = document.getElementById('manualDueDate').value;
+
+    if (!supplierName) {
+        alert('Supplier name is required for manual due entry.');
+        return;
+    }
+
+    if (dueAmount <= 0) {
+        alert('Due amount must be greater than zero.');
+        return;
+    }
+
+    const receivedDate = parseInputDate(receivedDateRaw, false);
+    if (!receivedDate) {
+        alert('Please select a valid received date.');
+        return;
+    }
+
+    let dueDate = parseInputDate(dueDateRaw, true);
+    if (!dueDate) {
+        dueDate = addDays(receivedDate, parsePaymentTermDays(paymentTerms));
+    }
+
+    const entry = {
+        id: `MANUAL|${Date.now()}|${Math.random().toString(36).slice(2, 8)}`,
+        vendorCode,
+        supplierName,
+        paymentTerms,
+        receivedDate: formatDisplayDate(receivedDate),
+        dueDate: formatDisplayDate(dueDate),
+        dueAmount,
+        createdAt: new Date().toISOString()
+    };
+
+    manualSupplierDueEntries.push(entry);
+    saveManualDueEntries();
+    event.target.reset();
+    document.getElementById('manualPaymentTerms').value = '0 DAYS';
+    renderSupplierDueList(filtered);
+}
+
+function toggleDuePayment(entryId) {
+    const current = getPaymentState(entryId);
+    if (current.paid) {
+        duePaymentStatusMap[entryId] = { paid: false, paidOn: '' };
+    } else {
+        duePaymentStatusMap[entryId] = {
+            paid: true,
+            paidOn: formatDisplayDate(new Date())
+        };
+    }
+
+    saveDuePaymentStatus();
+    renderSupplierDueList(filtered);
+}
+
 function getDueEntriesForRow(row) {
     const vendorCode = String(getField(row, ['VENDOR CODE', 'V CODE']) || '').trim() || 'Others';
     const supplierName = String(getField(row, ['SUPPLIER NAME']) || '').trim() || 'Others';
@@ -600,7 +992,8 @@ function summarizeSupplierDues(data) {
                     receivedDate: entry.receivedDate,
                     dueDate: entry.dueDate,
                     dueAmount: 0,
-                    priority: entry.priority
+                    priority: entry.priority,
+                    source: 'Auto'
                 });
             }
 
@@ -612,7 +1005,18 @@ function summarizeSupplierDues(data) {
         });
     });
 
-    return Array.from(summary.values()).sort((a, b) => {
+    const autoRows = Array.from(summary.values()).map(item => ({
+        ...item,
+        id: getDueEntryId(item, 'Auto')
+    }));
+
+    const manualRows = getManualSupplierDueRows();
+
+    return [...autoRows, ...manualRows].sort((a, b) => {
+        const aPaid = getPaymentState(a.id).paid;
+        const bPaid = getPaymentState(b.id).paid;
+        if (aPaid !== bPaid) return aPaid ? 1 : -1;
+
         const priorityOrder = { High: 0, Medium: 1, Low: 2 };
         const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
         if (priorityDiff !== 0) return priorityDiff;
@@ -622,26 +1026,46 @@ function summarizeSupplierDues(data) {
     });
 }
 
+function filterSupplierDueRows(rows) {
+    if (supplierDueFilter === 'all') return rows;
+
+    return rows.filter(item => {
+        const isPaid = getPaymentState(item.id).paid;
+        if (supplierDueFilter === 'paid') return isPaid;
+        if (supplierDueFilter === 'unpaid') return !isPaid;
+        if (supplierDueFilter === 'manual') return item.source === 'Manual';
+        return true;
+    });
+}
+
 function renderSupplierDueList(data) {
     const tbody = document.getElementById('supplierDueListBody');
     if (!tbody) return;
 
-    const rows = summarizeSupplierDues(data);
+    const rows = filterSupplierDueRows(summarizeSupplierDues(data));
     if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-5 text-sm text-slate-400 text-center">No supplier due amounts found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-5 text-sm text-slate-400 text-center">No supplier due amounts found.</td></tr>';
         return;
     }
 
     tbody.innerHTML = rows.map((item) => {
+        const paymentState = getPaymentState(item.id);
+        const encodedId = encodeURIComponent(item.id);
+        const paymentChip = paymentState.paid
+            ? `<button class="payment-toggle paid" onclick="toggleDuePayment(decodeURIComponent('${encodedId}'))">Paid ${escapeHtml(paymentState.paidOn || '')}</button>`
+            : `<button class="payment-toggle unpaid" onclick="toggleDuePayment(decodeURIComponent('${encodedId}'))">Mark Paid</button>`;
+
         return `
             <tr>
                 <td class="px-4 py-3.5 text-sm"><span class="priority-chip priority-${item.priority.toLowerCase()}">${item.priority}</span></td>
-                <td class="px-4 py-3.5 text-sm"><span class="vendor-chip">${item.vendorCode}</span></td>
-                <td class="px-4 py-3.5 text-sm text-slate-700">${item.supplierName}</td>
-                <td class="px-4 py-3.5 text-sm text-slate-600">${item.paymentTerms}</td>
+                <td class="px-4 py-3.5 text-sm"><span class="vendor-chip">${escapeHtml(item.vendorCode)}</span></td>
+                <td class="px-4 py-3.5 text-sm text-slate-700">${escapeHtml(item.supplierName)}</td>
+                <td class="px-4 py-3.5 text-sm text-slate-600">${escapeHtml(item.paymentTerms)}</td>
                 <td class="px-4 py-3.5 text-sm text-slate-600">${formatDisplayDate(item.receivedDate)}</td>
                 <td class="px-4 py-3.5 text-sm font-semibold text-slate-700">${formatDisplayDate(item.dueDate)}</td>
                 <td class="px-4 py-3.5 text-sm text-right font-bold text-rose-600">${formatMoney(item.dueAmount)}</td>
+                <td class="px-4 py-3.5 text-sm">${paymentChip}</td>
+                <td class="px-4 py-3.5 text-sm"><span class="source-chip ${item.source === 'Manual' ? 'source-manual' : 'source-auto'}">${item.source}</span></td>
             </tr>`;
     }).join('');
 }
@@ -654,7 +1078,10 @@ function getSupplierDueExportRows(data) {
         'Payment Terms': item.paymentTerms,
         'Received Date': formatDisplayDate(item.receivedDate),
         'Due Date': formatDisplayDate(item.dueDate),
-        'Due Amount SAR': Math.round(item.dueAmount)
+        'Due Amount SAR': Math.round(item.dueAmount),
+        'Payment Made': getPaymentState(item.id).paid ? 'Yes' : 'No',
+        'Paid On': getPaymentState(item.id).paidOn || '',
+        'Source': item.source
     }));
 }
 
